@@ -15,9 +15,9 @@ except Exception:  # pragma: no cover
 
 class FaceEngine:
     def __init__(self, storage_path=None):
-        self.storage_path = storage_path or os.path.join(
-            os.path.dirname(__file__), "data", "faces.pkl"
-        )
+        base_dir = os.path.dirname(__file__)
+        default_storage_path = os.path.join(base_dir, "data", "faces.pkl")
+        self.storage_path = storage_path or os.getenv("FACE_STORAGE_PATH", default_storage_path)
         Path(os.path.dirname(self.storage_path)).mkdir(parents=True, exist_ok=True)
 
         self.match_threshold = float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
@@ -29,7 +29,14 @@ class FaceEngine:
         self.require_single_face = os.getenv("FACE_REQUIRE_SINGLE_FACE", "true").lower() == "true"
 
         ctx_id = int(os.getenv("INSIGHTFACE_CTX_ID", "-1"))
-        self.app = FaceAnalysis(name="buffalo_l")
+        model_dir = os.getenv("INSIGHTFACE_MODEL_DIR")
+        providers = [p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()]
+
+        self.app = FaceAnalysis(
+            name=os.getenv("INSIGHTFACE_MODEL_NAME", "buffalo_l"),
+            root=model_dir,
+            providers=providers,
+        )
         self.app.prepare(ctx_id=ctx_id, det_size=(640, 640))
         self.known = self._load()  # employeeId -> [embedding1, embedding2, ...]
 
