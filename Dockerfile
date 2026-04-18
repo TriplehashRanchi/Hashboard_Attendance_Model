@@ -12,16 +12,19 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     libglib2.0-0 \
     libgl1 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
-    libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel cython
+
+# Remove any GUI OpenCV if a dependency tries to bring it in
+RUN pip uninstall -y opencv-python opencv-contrib-python || true
+
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Double-check final installed OpenCV packages
+RUN pip show opencv-python opencv-python-headless opencv-contrib-python || true
 
 COPY . .
 
