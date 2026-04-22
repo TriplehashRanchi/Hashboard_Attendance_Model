@@ -18,13 +18,11 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel cython
 
-# Remove any GUI OpenCV if a dependency tries to bring it in
-RUN pip uninstall -y opencv-python opencv-contrib-python || true
-
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Double-check final installed OpenCV packages
-RUN pip show opencv-python opencv-python-headless opencv-contrib-python || true
+# Remove GUI OpenCV AFTER all deps are installed, then reinstall headless
+RUN pip uninstall -y opencv-python opencv-contrib-python || true
+RUN pip install --no-cache-dir opencv-python-headless==4.13.0.90
 
 COPY . .
 
