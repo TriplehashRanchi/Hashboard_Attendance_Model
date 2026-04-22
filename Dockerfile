@@ -20,9 +20,13 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel cython
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Remove GUI OpenCV AFTER all deps are installed, then reinstall headless
+# Remove GUI OpenCV, reinstall headless
 RUN pip uninstall -y opencv-python opencv-contrib-python || true
 RUN pip install --no-cache-dir opencv-python-headless==4.13.0.90
+
+# Pre-download the insightface model during build
+RUN mkdir -p /app/models && \
+    python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l', root='/app/models').prepare(ctx_id=-1)"
 
 COPY . .
 
