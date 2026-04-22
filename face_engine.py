@@ -29,7 +29,7 @@ class FaceEngine:
         self.require_single_face = os.getenv("FACE_REQUIRE_SINGLE_FACE", "true").lower() == "true"
 
         ctx_id = int(os.getenv("INSIGHTFACE_CTX_ID", "-1"))
-        model_dir = os.getenv("INSIGHTFACE_MODEL_DIR")
+        model_dir = os.getenv("INSIGHTFACE_MODEL_DIR", "/app/models")
         providers = [p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()]
 
         self.app = FaceAnalysis(
