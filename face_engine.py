@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import pickle
 from pathlib import Path
@@ -13,11 +14,18 @@ except Exception:  # pragma: no cover
     Image = None
     ImageOps = None
 
+logger = logging.getLogger("face_engine")
+
 class FaceEngine:
     def __init__(self, storage_path=None):
         base_dir = os.path.dirname(__file__)
-        default_storage_path = os.path.join(base_dir, "data", "faces.pkl")
-        default_model_dir = os.path.join(base_dir, "data", "models")
+        default_data_dir = os.getenv("FACE_DATA_DIR")
+        if not default_data_dir:
+            default_data_dir = "/data" if os.path.isdir("/data") else os.path.join(base_dir, "data")
+
+        default_storage_path = os.path.join(default_data_dir, "faces.pkl")
+        bundled_model_dir = "/app/models" if os.path.isdir("/app/models") else None
+        default_model_dir = bundled_model_dir or os.path.join(default_data_dir, "models")
         self.storage_path = storage_path or os.getenv("FACE_STORAGE_PATH", default_storage_path)
         Path(os.path.dirname(self.storage_path)).mkdir(parents=True, exist_ok=True)
 
@@ -40,6 +48,16 @@ class FaceEngine:
         Path(model_dir).mkdir(parents=True, exist_ok=True)
         providers = [p.strip() for p in os.getenv("INSIGHTFACE_PROVIDERS", "CPUExecutionProvider").split(",") if p.strip()]
 
+        logger.info(
+            "Initializing FaceEngine storage_path=%s model_dir=%s providers=%s threshold=%s min_detection=%s min_face_ratio=%s",
+            self.storage_path,
+            model_dir,
+            providers,
+            self.match_threshold,
+            self.min_detection_score,
+            self.min_face_ratio,
+        )
+
         self.app = FaceAnalysis(
             name=os.getenv("INSIGHTFACE_MODEL_NAME", "buffalo_l"),
             root=model_dir,
@@ -47,6 +65,7 @@ class FaceEngine:
         )
         self.app.prepare(ctx_id=ctx_id, det_size=(det_size_value, det_size_value))
         self.known = self._load()  # employeeId -> [embedding1, embedding2, ...]
+        logger.info("FaceEngine ready registered_users=%s", len(self.known))
 
     def register(self, employee_id, image_bytes):
         img = self._decode_image(image_bytes)
@@ -56,13 +75,25 @@ class FaceEngine:
         img = self._prepare_image(img)
         faces = self.app.get(img)
         if not faces:
+            logger.info("Face register rejected employee_id=%s reason=no_face_found", employee_id)
             return {"success": False, "reason": "no_face_found"}
         if self.require_single_face and len(faces) > 1:
+            logger.info(
+                "Face register rejected employee_id=%s reason=multiple_faces_detected face_count=%s",
+                employee_id,
+                len(faces),
+            )
             return {"success": False, "reason": "multiple_faces_detected"}
 
         best_face = self._select_best_face(faces)
         quality = self._check_quality(img, best_face)
         if not quality["ok"]:
+            logger.info(
+                "Face register rejected employee_id=%s reason=%s metrics=%s",
+                employee_id,
+                quality["reason"],
+                quality["metrics"],
+            )
             return {
                 "success": False,
                 "reason": quality["reason"],
@@ -73,10 +104,17 @@ class FaceEngine:
         embeddings.append(self._normalize_embedding(best_face.embedding))
         self.known[employee_id] = embeddings[-self.max_embeddings_per_user :]
         self._save()
+        logger.info(
+            "Face registered employee_id=%s embeddings=%s metrics=%s",
+            employee_id,
+            len(self.known[employee_id]),
+            quality["metrics"],
+        )
         return {"success": True, "reason": "registered", "metrics": quality["metrics"]}
 
     def recognize(self, image_bytes):
         if not self.known:
+            logger.info("Face recognize rejected reason=no_registered_faces")
             return {
                 "matched": False,
                 "score": None,
@@ -91,8 +129,10 @@ class FaceEngine:
         img = self._prepare_image(img)
         faces = self.app.get(img)
         if not faces:
+            logger.info("Face recognize rejected reason=no_face_found")
             return {"matched": False, "score": None, "employeeId": None, "reason": "no_face_found"}
         if self.require_single_face and len(faces) > 1:
+            logger.info("Face recognize rejected reason=multiple_faces_detected face_count=%s", len(faces))
             return {
                 "matched": False,
                 "score": None,
@@ -104,6 +144,11 @@ class FaceEngine:
         emb = self._normalize_embedding(best_face.embedding)
         quality = self._check_quality(img, best_face)
         if not quality["ok"]:
+            logger.info(
+                "Face recognize rejected reason=%s metrics=%s",
+                quality["reason"],
+                quality["metrics"],
+            )
             return {
                 "matched": False,
                 "score": None,
@@ -126,6 +171,13 @@ class FaceEngine:
                     second_best_sim = sim
 
         if best_sim >= self.match_threshold and (best_sim - second_best_sim) >= self.match_margin:
+            logger.info(
+                "Face recognize matched employee_id=%s score=%.4f margin=%.4f metrics=%s",
+                best_id,
+                best_sim,
+                best_sim - second_best_sim,
+                quality["metrics"],
+            )
             return {
                 "matched": True,
                 "employeeId": best_id,
@@ -134,11 +186,21 @@ class FaceEngine:
                 "metrics": quality["metrics"],
             }
 
+        reason = "ambiguous_match" if best_sim >= self.match_threshold else "below_threshold"
+        logger.info(
+            "Face recognize rejected reason=%s best_id=%s score=%.4f second_best=%.4f margin=%.4f metrics=%s",
+            reason,
+            best_id,
+            best_sim,
+            second_best_sim,
+            best_sim - second_best_sim,
+            quality["metrics"],
+        )
         return {
             "matched": False,
             "employeeId": None,
             "score": float(best_sim),
-            "reason": "ambiguous_match" if best_sim >= self.match_threshold else "below_threshold",
+            "reason": reason,
             "metrics": quality["metrics"],
         }
 
@@ -188,7 +250,8 @@ class FaceEngine:
                 else:
                     normalized[key] = [self._normalize_embedding(np.array(value, dtype=np.float32))]
             return normalized
-        except Exception:
+        except Exception as exc:
+            logger.exception("Failed to load face storage path=%s error=%s", self.storage_path, exc)
             return {}
 
     def _save(self):

@@ -1,13 +1,46 @@
 import os
+import logging
+import time
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, File, Form
 from face_engine import FaceEngine
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("face_api")
 
 app = FastAPI()
 engine = FaceEngine()
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
 FACE_API_KEY = os.getenv("FACE_API_KEY")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.info(
+            "request method=%s path=%s status=%s elapsed_ms=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
+        return response
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.exception(
+            "request_failed method=%s path=%s elapsed_ms=%s",
+            request.method,
+            request.url.path,
+            elapsed_ms,
+        )
+        raise
 
 
 def _validate_api_key(x_api_key: Optional[str]) -> None:
@@ -34,7 +67,12 @@ async def _read_validated_image(file: UploadFile) -> bytes:
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "registeredUsers": len(engine.known)}
+    return {
+        "ok": True,
+        "registeredUsers": len(engine.known),
+        "storagePath": engine.storage_path,
+        "knownUsers": list(engine.known.keys()),
+    }
 
 
 @app.post("/register")
@@ -51,6 +89,13 @@ async def register(
 
     img = await _read_validated_image(file)
     result = engine.register(emp_id.strip(), img)
+    logger.info(
+        "register_result employee_id=%s success=%s reason=%s metrics=%s",
+        emp_id.strip(),
+        result.get("success"),
+        result.get("reason"),
+        result.get("metrics"),
+    )
 
     if result["success"]:
         return {
@@ -76,6 +121,14 @@ async def recognize(
     _validate_api_key(x_api_key)
     img = await _read_validated_image(file)
     result = engine.recognize(img)
+    logger.info(
+        "recognize_result matched=%s employee_id=%s score=%s reason=%s metrics=%s",
+        result.get("matched"),
+        result.get("employeeId"),
+        result.get("score"),
+        result.get("reason"),
+        result.get("metrics"),
+    )
 
     if result["matched"]:
         return {
@@ -100,7 +153,9 @@ async def inspect(
 ):
     _validate_api_key(x_api_key)
     img = await _read_validated_image(file)
-    return engine.inspect(img)
+    result = engine.inspect(img)
+    logger.info("inspect_result ok=%s reason=%s face_count=%s", result.get("ok"), result.get("reason"), result.get("faceCount"))
+    return result
 
 
 if __name__ == "__main__":
