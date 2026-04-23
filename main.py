@@ -93,6 +93,16 @@ async def recognize(
     }
 
 
+@app.post("/inspect")
+async def inspect(
+    file: UploadFile = File(...),
+    x_api_key: Optional[str] = Header(None),
+):
+    _validate_api_key(x_api_key)
+    img = await _read_validated_image(file)
+    return engine.inspect(img)
+
+
 if __name__ == "__main__":
     import uvicorn
 
