@@ -13,9 +13,10 @@ logging.basicConfig(
 logger = logging.getLogger("face_api")
 
 app = FastAPI()
-engine = FaceEngine()
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
 FACE_API_KEY = os.getenv("FACE_API_KEY")
+engine: Optional[FaceEngine] = None
+engine_init_error: Optional[str] = None
 
 
 @app.middleware("http")
@@ -65,8 +66,45 @@ async def _read_validated_image(file: UploadFile) -> bytes:
     return data
 
 
+def get_engine() -> FaceEngine:
+    global engine, engine_init_error
+    if engine is not None:
+        return engine
+
+    try:
+        logger.info("Initializing FaceEngine")
+        engine = FaceEngine()
+        engine_init_error = None
+        return engine
+    except Exception as exc:
+        engine_init_error = str(exc)
+        logger.exception("FaceEngine initialization failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Face engine initialization failed: {engine_init_error}",
+        ) from exc
+
+
 @app.get("/health")
 async def health():
+    if engine is None and engine_init_error is None:
+        try:
+            get_engine()
+        except HTTPException:
+            pass
+
+    if engine_init_error:
+        return {
+            "ok": False,
+            "error": engine_init_error,
+        }
+
+    if engine is None:
+        return {
+            "ok": False,
+            "error": "Face engine not initialized",
+        }
+
     return {
         "ok": True,
         "registeredUsers": len(engine.known),
@@ -87,8 +125,9 @@ async def register(
     if not emp_id:
         raise HTTPException(status_code=400, detail="Missing employeeId")
 
+    current_engine = get_engine()
     img = await _read_validated_image(file)
-    result = engine.register(emp_id.strip(), img)
+    result = current_engine.register(emp_id.strip(), img)
     logger.info(
         "register_result employee_id=%s success=%s reason=%s metrics=%s",
         emp_id.strip(),
@@ -119,8 +158,9 @@ async def recognize(
     x_api_key: Optional[str] = Header(None),
 ):
     _validate_api_key(x_api_key)
+    current_engine = get_engine()
     img = await _read_validated_image(file)
-    result = engine.recognize(img)
+    result = current_engine.recognize(img)
     logger.info(
         "recognize_result matched=%s employee_id=%s score=%s reason=%s metrics=%s",
         result.get("matched"),
@@ -152,8 +192,9 @@ async def inspect(
     x_api_key: Optional[str] = Header(None),
 ):
     _validate_api_key(x_api_key)
+    current_engine = get_engine()
     img = await _read_validated_image(file)
-    result = engine.inspect(img)
+    result = current_engine.inspect(img)
     logger.info("inspect_result ok=%s reason=%s face_count=%s", result.get("ok"), result.get("reason"), result.get("faceCount"))
     return result
 
