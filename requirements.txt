@@ -6,3 +6,5 @@ numpy==2.4.1
 opencv-python-headless==4.13.0.90
 python-multipart==0.0.21
 Pillow==12.1.0
+faiss-cpu==1.9.0
+boto3==1.38.0

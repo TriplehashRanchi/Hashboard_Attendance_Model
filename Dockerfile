@@ -29,12 +29,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip uninstall -y opencv-python opencv-contrib-python || true
 RUN pip install --no-cache-dir opencv-python-headless==4.13.0.90
 
-# Pre-download the insightface model during build.
-RUN mkdir -p /app/models /data && \
-    python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l', root='/app/models').prepare(ctx_id=-1)"
+# Pre-download the InsightFace model during build so the first request is instant
+COPY download_models.py .
+RUN python download_models.py
 
 COPY . .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive 75 --workers 1"]
